@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import csv
+import json
+from pathlib import Path
+
+
+DROP_TEMPLATES = [
+    "Dropping [something] behind [something]",
+    "Dropping [something] in front of [something]",
+    "Dropping [something] into [something]",
+    "Dropping [something] next to [something]",
+    "Dropping [something] onto [something]",
+    "Moving [something] across a surface until it falls down",
+    "Putting [something] on the edge of [something] so it is not supported and falls down",
+    "Putting [something] onto [something else that cannot support it] so it falls down",
+]
+
+
+def normalize_template(template: str) -> str:
+    """Remove brackets so strings match the wording in test-answers.csv."""
+    return template.replace("[", "").replace("]", "")
+
+
+def load_test_ids(label_dir: Path, normalized_templates: set[str]) -> set[str]:
+    """Pull clip ids whose text matches the templates from test-answers.csv."""
+    ids: set[str] = set()
+    answers_path = label_dir / "test-answers.csv"
+    if not answers_path.exists():
+        print(f"{answers_path} 缺失，测试集无法筛选")
+        return ids
+    with answers_path.open(newline="", encoding="utf-8") as csvfile:
+        reader = csv.reader(csvfile, delimiter=";")
+        for row in reader:
+            if len(row) != 2:
+                continue
+            clip_id, template_text = row[0].strip(), row[1].strip()
+            if template_text in normalized_templates:
+                ids.add(clip_id)
+    return ids
+
+
+def main() -> None:
+    repo_dir = Path(__file__).resolve().parent
+    label_dir = repo_dir.parent / "labels"
+    out_dir = label_dir / "drop_object"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    normalized_templates = {normalize_template(t) for t in DROP_TEMPLATES}
+    test_ids = load_test_ids(label_dir, normalized_templates)
+
+    split_files = {
+        "train": label_dir / "train.json",
+        "validation": label_dir / "validation.json",
+        "test": label_dir / "test.json",
+    }
+    filename_map = {"train": "train", "validation": "val", "test": "test"}
+
+    stats: dict[str, int] = {}
+    for split, file_path in split_files.items():
+        if not file_path.exists():
+            print(f"{file_path} 缺失，跳过 {split}")
+            continue
+        entries = json.loads(file_path.read_text(encoding="utf-8"))
+        if split == "test":
+            filtered = [e for e in entries if str(e.get("id")) in test_ids]
+        else:
+            filtered = [e for e in entries if e.get("template") in DROP_TEMPLATES]
+        stats[split] = len(filtered)
+
+        out_path = out_dir / f"{filename_map[split]}_drop_object.json"
+        out_path.write_text(json.dumps(filtered, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"{split}: {len(filtered)} entries -> {out_path}")
+
+    print("drop_object_summary:", stats)
+
+
+if __name__ == "__main__":
+    main()
